@@ -1,4 +1,4 @@
-# BankerRobberGame README
+# BankerRobber
 
 ## Project Overview
 
