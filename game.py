@@ -31,7 +31,7 @@ class BankerRobberGame(AECEnv):
         self.phase = None
     
     @functools.lru_cache(maxsize=None)
-    def observation_space(self, agent):
+    def observation_space(self):
         return spaces.Dict({
 
             "observation": spaces.Dict({
@@ -46,7 +46,7 @@ class BankerRobberGame(AECEnv):
             })
     
     @functools.lru_cache(maxsize=None)
-    def action_space(self, agent):
+    def action_space(self):
         return spaces.Discrete(max(5, self._num_agents))
     
     def render(self):
