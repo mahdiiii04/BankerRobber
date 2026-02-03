@@ -1,9 +1,10 @@
-# nfsp.py (with all major fixes)
+# nfsp.py (with additional fixes: reward normalization, Huber loss, grad clip, lower lr, higher beta, longer target update)
 import numpy as np
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Categorical
+import torch.nn.utils as utils
 
 from encoding import encode_observation
 from game import BankerRobberGame
@@ -22,9 +23,11 @@ class NFSPAgent:
         br_buffer_size=10_000,
         policy_buffer_size=100_000,
         batch_size=32,
-        lr=1e-4,
-        beta=0.01,
-        target_update_every=100
+        lr=1e-5,
+        beta=0.1,  # Increased for more entropy
+        target_update_every=1000,  # Increased
+        reward_scale=1.0 / 50.0,  # Normalize rewards by approx max |r| ~50
+        grad_clip=1.0
     ):
         self.epsilon = epsilon
         self.gamma = gamma
@@ -32,6 +35,8 @@ class NFSPAgent:
         self.num_actions = num_actions
         self.beta = beta
         self.target_update_every = target_update_every
+        self.reward_scale = reward_scale
+        self.grad_clip = grad_clip
         self.steps = 0
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -122,10 +127,17 @@ class NFSPAgent:
             max_next_q = next_q.max(dim=1)[0]
             target = rewards + (1 - dones) * self.gamma * max_next_q
 
-        loss = F.mse_loss(q_sa, target)
+        loss = F.smooth_l1_loss(q_sa, target)  # Huber loss
 
         self.q_optimizer.zero_grad()
         loss.backward()
+        if self.grad_clip > 0:
+            utils.clip_grad_norm_(
+                list(self.net.fc1.parameters()) +
+                list(self.net.fc2.parameters()) +
+                list(self.net.q_head.parameters()),
+                self.grad_clip
+            )
         self.q_optimizer.step()
 
     # ------------------------------------------------------------------
@@ -150,6 +162,13 @@ class NFSPAgent:
 
         self.policy_optimizer.zero_grad()
         loss.backward()
+        if self.grad_clip > 0:
+            utils.clip_grad_norm_(
+                list(self.net.fc1.parameters()) +
+                list(self.net.fc2.parameters()) +
+                list(self.net.policy_head.parameters()),
+                self.grad_clip
+            )
         self.policy_optimizer.step()
 
     # ------------------------------------------------------------------
@@ -158,13 +177,16 @@ class NFSPAgent:
     def train(self, num_episodes, max_turns=None):
         env = BankerRobberGame()
 
+        episode_rewards = []  # To log average rewards
+
         for episode in range(num_episodes):
             env.reset()
-            probe_obs_vec = None   # ✅ DEFINE IT HERE
+            probe_obs_vec = None
             last_obs_vec = {}
             last_action = {}
             last_mode = {}
             total_reward_seen = {agent: 0 for agent in env.possible_agents}
+            episode_reward = 0
 
             while env.agents:
                 agent_name = env.agent_selection
@@ -175,7 +197,6 @@ class NFSPAgent:
                     max_turns=env.max_turns if max_turns is None else max_turns
                 )
 
-                # ✅ Capture a fixed probe state ONCE
                 if probe_obs_vec is None:
                     probe_obs_vec = obs_vec.copy()
 
@@ -187,6 +208,7 @@ class NFSPAgent:
                 reward = env.rewards[agent_name]
                 done = env.terminations[agent_name] or env.truncations[agent_name]
                 total_reward_seen[agent_name] += reward
+                episode_reward += reward  # Sum over all for logging
 
                 last_obs_vec[agent_name] = obs_vec
                 last_action[agent_name] = action
@@ -203,10 +225,13 @@ class NFSPAgent:
                     next_obs_vec = np.zeros_like(obs_vec)
                     next_action_mask = np.zeros_like(action_mask)
 
+                # Normalize reward
+                norm_reward = reward * self.reward_scale
+
                 # Store transition
                 if mode == 1:  # Best-response
                     self.br_buffer.add(
-                        (obs_vec, action, reward, next_obs_vec, float(done), action_mask, next_action_mask)
+                        (obs_vec, action, norm_reward, next_obs_vec, float(done), action_mask, next_action_mask)
                     )
                 else:          # Average policy
                     self.policy_buffer.add((obs_vec, action, action_mask))
@@ -221,19 +246,26 @@ class NFSPAgent:
             # Add terminal transitions for additional rewards if any
             for agent in env.possible_agents:
                 additional_r = env._cumulative_rewards[agent] - total_reward_seen[agent]
-                if additional_r != 0 and last_mode.get(agent, 0) == 1:
-                    next_obs_vec = np.zeros_like(last_obs_vec[agent])
-                    next_action_mask = np.zeros_like(action_mask)  # dummy
-                    self.br_buffer.add(
-                        (last_obs_vec[agent], last_action[agent], additional_r, next_obs_vec, 1.0, action_mask, next_action_mask)
-                    )
+                if additional_r != 0:
+                    norm_additional_r = additional_r * self.reward_scale
+                    if last_mode.get(agent, 0) == 1:
+                        next_obs_vec = np.zeros_like(last_obs_vec[agent])
+                        next_action_mask = np.zeros_like(action_mask)  # dummy
+                        self.br_buffer.add(
+                            (last_obs_vec[agent], last_action[agent], norm_additional_r, next_obs_vec, 1.0, action_mask, next_action_mask)
+                        )
+                    episode_reward += additional_r  # For logging
+
+            episode_rewards.append(episode_reward / len(env.possible_agents))  # Avg per agent
 
             # ===== Logging & diagnostics =====
             if (episode + 1) % 100 == 0:
+                avg_reward = np.mean(episode_rewards[-100:]) if episode_rewards else 0
                 print(
                     f"[NFSP] Episode {episode + 1}/{num_episodes} | "
                     f"BR buffer: {len(self.br_buffer.buffer)} | "
-                    f"Policy buffer: {len(self.policy_buffer.buffer)}"
+                    f"Policy buffer: {len(self.policy_buffer.buffer)} | "
+                    f"Avg reward: {avg_reward:.2f}"
                 )
 
                 with torch.no_grad():
