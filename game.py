@@ -1,3 +1,4 @@
+# game.py (with fixes for rewards)
 import numpy as np
 from gymnasium import spaces
 from pettingzoo import AECEnv
@@ -154,6 +155,7 @@ class BankerRobberGame(AECEnv):
             if discarded_card == 0:
                 print(f"Player {agent} cannot discard the robber card.")
                 self.penalties[agent] += -10
+                self.rewards[agent] += -10
                 self._cumulative_rewards[agent] += -10
                 self._advance_turn()
                 return
@@ -163,6 +165,7 @@ class BankerRobberGame(AECEnv):
             if action > 1:
                 print(f"Invalid vote action by {agent}.")
                 self.penalties[agent] += -1
+                self.rewards[agent] += -1
                 self._cumulative_rewards[agent] += -1
                 self.votes[agent].append(0)
                 self._advance_turn()
@@ -172,6 +175,7 @@ class BankerRobberGame(AECEnv):
             if action > self._num_agents - 1:
                 print(f"Invalid player voting action by {agent}.")
                 self.penalties[agent] += -1
+                self.rewards[agent] += -1
                 self._cumulative_rewards[agent] += -1
                 agent_index = self.agents.index(agent)
                 self.player_votes[agent].append(agent_index)
@@ -225,22 +229,23 @@ class BankerRobberGame(AECEnv):
             total_sum = total_sum / (self.current_turn  + 1)
             for agent in self.agents:
                 if agent == self.agents[self.robber_index]:
+                    self.rewards[agent] += -total_sum
                     self._cumulative_rewards[agent] += -total_sum
                 else:
+                    self.rewards[agent] += total_sum / (self._num_agents - 1)
                     self._cumulative_rewards[agent] += total_sum / (self._num_agents - 1)
         elif case == "robber_wins":
             robber_sum = sum(self.hands[self.agents[self.robber_index]])
             for agent in self.agents:
                 if agent == self.agents[self.robber_index]:
+                    self.rewards[agent] += robber_sum
                     self._cumulative_rewards[agent] += robber_sum
                 else:
+                    self.rewards[agent] += -robber_sum
                     self._cumulative_rewards[agent] += -robber_sum
-        self.rewards = self._cumulative_rewards.copy()
         self.end_game()
 
     def end_game(self):
         self.terminations = {agent: True for agent in self.agents}
         self.truncations = {agent: True for agent in self.agents}
         self.agents = []
-
-            
