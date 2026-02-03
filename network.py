@@ -6,20 +6,20 @@ class NFSPNetwork(nn.Module):
     def __init__(self, num_actions, card_emb_dim=16, hidden_dim=128):
         super().__init__()
 
-        # Hand Embedding
+        # hand embedding
         self.card_embedder = nn.Embedding(
             num_embeddings=11,
             embedding_dim=card_emb_dim
         )
 
-        # Shared Encoder
+        # shared encoder
         self.fc1 = nn.Linear(44 + 5 * card_emb_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
 
-        # Best response (RL)
+        # best response (RL)
         self.q_head = nn.Linear(hidden_dim, num_actions)
 
-        # Average Policy head (supervised)
+        # avg policy head (supervised)
         self.policy_head = nn.Linear(hidden_dim, num_actions)
 
     def forward(self, obs_vec, action_mask=None):

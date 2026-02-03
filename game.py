@@ -60,13 +60,11 @@ class BankerRobberGame(AECEnv):
         print(f"Robber: player_{self.robber_index} (hidden in real play)")
         print("-" * 40)
 
-        # Show each player's hand and discard pile
         for agent in self.possible_agents:
             hand_str = " ".join(str(c) for c in self.hands.get(agent, []))
             discard_str = " ".join(str(c) for c in self.discarded_piles.get(agent, []))
             print(f"{agent} | Hand: {hand_str} | Discards: {discard_str}")
 
-        # Show votes depending on phase
         if self.phase == "vote":
             print("\nVotes so far:")
             for agent in self.agents:

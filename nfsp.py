@@ -1,4 +1,3 @@
-# nfsp.py (with additional fixes: reward normalization, Huber loss, grad clip, lower lr, higher beta, longer target update)
 import numpy as np
 import torch
 import torch.optim as optim
@@ -24,9 +23,9 @@ class NFSPAgent:
         policy_buffer_size=100_000,
         batch_size=32,
         lr=1e-5,
-        beta=0.1,  # Increased for more entropy
-        target_update_every=1000,  # Increased
-        reward_scale=1.0 / 50.0,  # Normalize rewards by approx max |r| ~50
+        beta=0.1,  
+        target_update_every=1000,  
+        reward_scale=1.0 / 50.0,  
         grad_clip=1.0
     ):
         self.epsilon = epsilon
@@ -41,7 +40,6 @@ class NFSPAgent:
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Network
         self.net = NFSPNetwork(
             num_actions=num_actions,
             card_emb_dim=card_embed_dim,
@@ -55,7 +53,6 @@ class NFSPAgent:
         ).to(self.device)
         self.target_net.load_state_dict(self.net.state_dict())
 
-        # Optimizers (shared backbone, separate heads)
         self.q_optimizer = optim.Adam(
             list(self.net.fc1.parameters()) +
             list(self.net.fc2.parameters()) +
@@ -70,13 +67,10 @@ class NFSPAgent:
             lr=lr
         )
 
-        # Buffers
         self.br_buffer = ReplayBuffer(br_buffer_size)
         self.policy_buffer = ReservoirBuffer(policy_buffer_size)
 
-    # ------------------------------------------------------------------
-    # Action selection
-    # ------------------------------------------------------------------
+
     def select_action(self, obs_vec, action_mask):
         obs_tensor = torch.tensor(
             obs_vec, dtype=torch.float32, device=self.device
@@ -88,22 +82,19 @@ class NFSPAgent:
 
         q_values, policy_logits = self.net(obs_tensor, mask_tensor)
 
-        # ε-greedy between BR and average policy
         if np.random.rand() < self.epsilon:
-            # Best response (Q-head)
+
             q_values = q_values.masked_fill(~mask_tensor, -1e9)
             action = torch.argmax(q_values, dim=-1).item()
             return 1, action  # BR
         else:
-            # Average policy
+
             dist = Categorical(logits=policy_logits)
             action = dist.sample().item()
-            return 0, action  # AVG
+            return 0, action  
 
-    # ------------------------------------------------------------------
-    # Q-head training (DQN-style)
-    # ------------------------------------------------------------------
-    def train_q_head(self):
+
+    def train_q_head(self): # RL part
         if len(self.br_buffer.buffer) < self.batch_size:
             return
 
@@ -140,10 +131,7 @@ class NFSPAgent:
             )
         self.q_optimizer.step()
 
-    # ------------------------------------------------------------------
-    # Policy-head training (supervised learning)
-    # ------------------------------------------------------------------
-    def train_policy_head(self):
+    def train_policy_head(self): # supervised part
         if len(self.policy_buffer.buffer) < self.batch_size:
             return
 
@@ -171,13 +159,10 @@ class NFSPAgent:
             )
         self.policy_optimizer.step()
 
-    # ------------------------------------------------------------------
-    # Main NFSP training loop
-    # ------------------------------------------------------------------
     def train(self, num_episodes, max_turns=None):
         env = BankerRobberGame()
 
-        episode_rewards = []  # To log average rewards
+        episode_rewards = []  # for logging
 
         for episode in range(num_episodes):
             env.reset()
@@ -208,7 +193,7 @@ class NFSPAgent:
                 reward = env.rewards[agent_name]
                 done = env.terminations[agent_name] or env.truncations[agent_name]
                 total_reward_seen[agent_name] += reward
-                episode_reward += reward  # Sum over all for logging
+                episode_reward += reward  
 
                 last_obs_vec[agent_name] = obs_vec
                 last_action[agent_name] = action
@@ -236,29 +221,26 @@ class NFSPAgent:
                 else:          # Average policy
                     self.policy_buffer.add((obs_vec, action, action_mask))
 
-                # Train both heads
                 self.train_q_head()
                 self.steps += 1
                 if self.steps % self.target_update_every == 0:
                     self.target_net.load_state_dict(self.net.state_dict())
                 self.train_policy_head()
 
-            # Add terminal transitions for additional rewards if any
             for agent in env.possible_agents:
                 additional_r = env._cumulative_rewards[agent] - total_reward_seen[agent]
                 if additional_r != 0:
                     norm_additional_r = additional_r * self.reward_scale
                     if last_mode.get(agent, 0) == 1:
                         next_obs_vec = np.zeros_like(last_obs_vec[agent])
-                        next_action_mask = np.zeros_like(action_mask)  # dummy
+                        next_action_mask = np.zeros_like(action_mask)  
                         self.br_buffer.add(
                             (last_obs_vec[agent], last_action[agent], norm_additional_r, next_obs_vec, 1.0, action_mask, next_action_mask)
                         )
-                    episode_reward += additional_r  # For logging
+                    episode_reward += additional_r 
 
-            episode_rewards.append(episode_reward / len(env.possible_agents))  # Avg per agent
+            episode_rewards.append(episode_reward / len(env.possible_agents))  
 
-            # ===== Logging & diagnostics =====
             if (episode + 1) % 100 == 0:
                 avg_reward = np.mean(episode_rewards[-100:]) if episode_rewards else 0
                 print(

@@ -2,7 +2,6 @@ import random
 import numpy as np
 
 class ReplayBuffer:
-    """Standard replay buffer for best-response RL."""
     def __init__(self, capacity=10000):
         self.buffer = []
         self.capacity = capacity
@@ -18,18 +17,17 @@ class ReplayBuffer:
         return [self.buffer[i] for i in idx]
 
 class ReservoirBuffer:
-    """Reservoir buffer for average-policy supervised learning."""
     def __init__(self, capacity=100000):
         self.buffer = []
         self.capacity = capacity
-        self.n_seen = 0  # total seen transitions for reservoir sampling
+        self.n_seen = 0  
 
     def add(self, transition):
         self.n_seen += 1
         if len(self.buffer) < self.capacity:
             self.buffer.append(transition)
         else:
-            # Reservoir sampling
+            
             r = np.random.randint(0, self.n_seen)
             if r < self.capacity:
                 self.buffer[r] = transition
